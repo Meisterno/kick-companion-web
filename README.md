@@ -1,30 +1,46 @@
-# Kick Companion (Web)
+# Kick Companion Web v1.1
 
-Mobil uyumlu Kick.com companion web sitesi.
+Mobile-first Kick.com companion — player + real-time chat + emotes.
 
-## Özellikler
-- Canlı HLS player (düşük latency)
-- Gerçek zamanlı chat
-- 7TV + BTTV emote
-- Favoriler + son izlenenler
-- Mobil öncelikli + PWA (Ana ekrana eklenebilir)
-- Responsive
+## Features
 
-## Termux ile çalıştırma
+- **HLS low-latency player** (hls.js)
+- **Real-time chat** via Kick Pusher WebSocket
+- **Emotes**: Kick native `[emote:id:name]` + 7TV + BTTV
+- Favorites & recent streams (localStorage)
+- Settings page (latency, chat limit, timestamps…)
+- Dark theme, PWA-ready, works great on Android browser / Termux
+
+## Quick start (Termux / phone)
 
 ```bash
-pkg update && pkg install nodejs git
+cd ~
+rm -rf kick-companion-web
 git clone https://github.com/Meisterno/kick-companion-web.git
 cd kick-companion-web
 npm install
 npm run dev -- --host
 ```
 
-Çıkan adresi (genelde http://0.0.0.0:5173) tarayıcıda aç.  
-Aynı telefonda `http://127.0.0.1:5173` yazarak da açabilirsin.
+Open in Chrome: `http://127.0.0.1:5173`
 
-## Build (host için)
+## Update
+
 ```bash
-npm run build
+cd ~/kick-companion-web
+git pull
+npm install
+npm run dev -- --host
 ```
-`dist/` klasörünü Vercel / Netlify / Cloudflare Pages'e at.
+
+## Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | Home — search, favorites, featured |
+| `/channel/:slug` | Player + live chat |
+| `/settings` | App settings |
+
+## Stack
+
+Vite + React 19 + TypeScript + hls.js + react-router-dom
