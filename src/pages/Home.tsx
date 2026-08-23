@@ -4,7 +4,7 @@ import { getChannel, type KickChannel } from '../lib/kick-api';
 
 const FEATURED = [
   'xqc', 'adinross', 'trainwreckstv', 'amouranth', 'destiny',
-  'hasanabi', 'mizkiz', 'pokimane', 'shroud', 'nmplol', 'sodapoppin', 'kaicenat',
+  'hasanabi', 'mizkif', 'pokimane', 'shroud', 'nmplol', 'sodapoppin', 'kaicenat',
 ];
 
 interface Card {
@@ -169,7 +169,7 @@ export default function Home() {
               </button>
             ))}
           </div>
-          {streams.length === 0 && <div className="empty">Stream bulunamadı. Slu g ile ara.</div>}
+          {streams.length === 0 && <div className="empty">Stream bulunamadı. Slug ile ara.</div>}
         </>
       )}
     </div>
