@@ -97,17 +97,22 @@ export default function Home() {
 
   return (
     <div className="home">
-      <form className="search-bar" onSubmit={onSearch}>
-        <span style={{ color: 'var(--muted)' }}>🔍</span>
-        <input
-          placeholder="Streamer slug (xqc, adinross...)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
-        <button type="submit" className="search-btn">Git</button>
-      </form>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <form className="search-bar" onSubmit={onSearch} style={{ flex: 1, marginBottom: 0 }}>
+          <span style={{ color: 'var(--muted)' }}>🔍</span>
+          <input
+            placeholder="Streamer slug (xqc, adinross...)"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+          <button type="submit" className="search-btn">Git</button>
+        </form>
+        <button className="icon-btn" onClick={() => nav('/settings')} style={{ fontSize: 22, flexShrink: 0 }} title="Ayarlar">
+          ⚙️
+        </button>
+      </div>
 
       {loading ? (
         <div className="loading">Yükleniyor...</div>
@@ -169,7 +174,7 @@ export default function Home() {
               </button>
             ))}
           </div>
-          {streams.length === 0 && <div className="empty">Stream bulunamadı. Slug ile ara.</div>}
+          {streams.length === 0 && <div className="empty">Stream bulunamadı. Slu g ile ara.</div>}
         </>
       )}
     </div>
