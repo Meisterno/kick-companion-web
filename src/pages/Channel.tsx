@@ -22,7 +22,6 @@ function formatViewers(n: number) {
 function getFavs(): string[] {
   try { return JSON.parse(localStorage.getItem('kick_favs') || '[]'); } catch { return []; }
 }
-
 function toggleFav(slug: string): boolean {
   const list = getFavs();
   const i = list.indexOf(slug);
@@ -31,7 +30,6 @@ function toggleFav(slug: string): boolean {
   localStorage.setItem('kick_favs', JSON.stringify(list.slice(0, 40)));
   return i < 0;
 }
-
 function getSetting(key: string, def: string) {
   try { return localStorage.getItem(key) || def; } catch { return def; }
 }
@@ -50,16 +48,19 @@ export default function Channel() {
   const [chatStatus, setChatStatus] = useState('disconnected');
   const [emotes, setEmotes] = useState<EmoteMap>({});
   const [fav, setFav] = useState(false);
-  const [showChat, setShowChat] = useState(true);
+  const [showChat, setShowChat] = useState(getSetting('kick_auto_hide_chat', '0') !== '1');
   const [muted, setMuted] = useState(true);
+  const [playerError, setPlayerError] = useState('');
 
   const lowLatency = getSetting('kick_low_latency', '1') === '1';
   const chatLimit = parseInt(getSetting('kick_chat_limit', '200'), 10) || 200;
+  const showTs = getSetting('kick_timestamps', '1') === '1';
 
   const load = useCallback(async () => {
     if (!slug) return;
     setLoading(true);
     setError('');
+    setPlayerError('');
     try {
       const data = await getChannel(slug.toLowerCase());
       setChannel(data);
@@ -78,7 +79,7 @@ export default function Channel() {
 
   useEffect(() => { load(); }, [load]);
 
-  // HLS player – muted autoplay works on mobile
+  // HLS player
   useEffect(() => {
     const url = channel?.playback_url;
     const video = videoRef.current;
@@ -86,20 +87,41 @@ export default function Channel() {
 
     video.muted = true;
     setMuted(true);
+    setPlayerError('');
 
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: lowLatency,
         backBufferLength: 30,
-        maxBufferLength: lowLatency ? 10 : 30,
+        maxBufferLength: lowLatency ? 12 : 30,
+        maxMaxBufferLength: 60,
+        startLevel: -1,
+        xhrSetup: (xhr) => {
+          xhr.withCredentials = false;
+        },
       });
       hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(video);
+
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {});
       });
+
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (data.fatal) {
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            setPlayerError('Yayın yüklenemedi. Yenilemeyi dene.');
+            hls.destroy();
+          }
+        }
+      });
+
       return () => {
         hls.destroy();
         hlsRef.current = null;
@@ -107,6 +129,8 @@ export default function Channel() {
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = url;
       video.play().catch(() => {});
+    } else {
+      setPlayerError('Bu tarayıcı HLS desteklemiyor');
     }
   }, [channel?.playback_url, channel?.livestream?.is_live, lowLatency]);
 
@@ -147,7 +171,12 @@ export default function Channel() {
   };
 
   if (loading) {
-    return <div className="loading" style={{ marginTop: 80 }}>Kanal yükleniyor...</div>;
+    return (
+      <div className="loading" style={{ marginTop: 80 }}>
+        <div className="spinner" />
+        <span>Kanal yükleniyor...</span>
+      </div>
+    );
   }
 
   if (error || !channel) {
@@ -169,14 +198,16 @@ export default function Channel() {
     <div className="channel">
       <div className="channel-main">
         <div className="topbar">
-          <button className="icon-btn" onClick={() => nav(-1)}>←</button>
+          <button className="icon-btn" onClick={() => nav('/')} title="Ana sayfa">←</button>
           <div className="topbar-center">
-            {channel.user.profile_pic && <img src={channel.user.profile_pic} alt="" />}
+            {channel.user.profile_pic && (
+              <img src={channel.user.profile_pic} alt="" referrerPolicy="no-referrer" />
+            )}
             <span>{channel.user.username}</span>
           </div>
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div className="topbar-actions">
             <button className="icon-btn" onClick={() => nav('/settings')} title="Ayarlar">⚙️</button>
-            <button className="icon-btn" onClick={onFav}>
+            <button className="icon-btn" onClick={onFav} title="Favori">
               <span className={fav ? 'heart' : ''}>{fav ? '♥' : '♡'}</span>
             </button>
           </div>
@@ -191,33 +222,25 @@ export default function Channel() {
                 playsInline
                 autoPlay
                 muted
-                style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}
+                poster=""
               />
-              {muted && (
-                <button
-                  onClick={toggleMute}
-                  style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    background: 'rgba(0,0,0,0.75)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 12,
-                    padding: '12px 20px',
-                    fontSize: 15,
-                    fontWeight: 700,
-                    zIndex: 5,
-                  }}
-                >
+              {muted && !playerError && (
+                <button className="unmute-btn" onClick={toggleMute}>
                   🔊 Sesi Aç
                 </button>
+              )}
+              {playerError && (
+                <div className="player-error">
+                  <p>{playerError}</p>
+                  <button className="search-btn" onClick={load}>Yenile</button>
+                </div>
               )}
             </>
           ) : (
             <div className="offline-box">
-              {channel.user.profile_pic && <img src={channel.user.profile_pic} alt="" />}
+              {channel.user.profile_pic && (
+                <img src={channel.user.profile_pic} alt="" referrerPolicy="no-referrer" />
+              )}
               <div>{isLive ? 'Yayın yükleniyor...' : 'Yayın kapalı'}</div>
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>{channel.user.username}</div>
             </div>
@@ -227,9 +250,7 @@ export default function Channel() {
               {isLive && <span className="live-tag">LIVE</span>}
               <span className="stream-title">{title}</span>
             </div>
-            {isLive && (
-              <span className="viewer-count">👁 {formatViewers(viewers)}</span>
-            )}
+            {isLive && <span className="viewer-count">👁 {formatViewers(viewers)}</span>}
           </div>
         </div>
       </div>
@@ -238,14 +259,12 @@ export default function Channel() {
         <div className="chat-area">
           <div className="chat-header">
             <h3>Chat</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="chat-header-right">
               <div className="status">
                 <span className={`status-dot ${chatStatus}`} />
                 {chatStatus}
               </div>
-              <button onClick={() => setShowChat(false)} style={{ color: 'var(--muted)', fontSize: 18 }}>
-                ▾
-              </button>
+              <button onClick={() => setShowChat(false)} className="icon-btn" style={{ fontSize: 16 }}>▾</button>
             </div>
           </div>
           <div className="chat-list">
@@ -258,7 +277,7 @@ export default function Channel() {
               const parts = parseMessage(m.content, emotes);
               return (
                 <div key={m.id} className="msg">
-                  <span className="msg-time">{m.time}</span>
+                  {showTs && <span className="msg-time">{m.time}</span>}
                   <span className="msg-user" style={{ color: m.color }}>{m.user}</span>
                   <span className="msg-content">
                     {parts.map((p, i) =>
@@ -270,9 +289,8 @@ export default function Channel() {
                           alt={p.value}
                           title={p.value}
                           loading="lazy"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                         />
                       ) : (
                         <span key={i}>{p.value}</span>
