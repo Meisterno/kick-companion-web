@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getChannel, type KickChannel } from '../lib/kick-api';
+import { getChannel, getThumb, type KickChannel } from '../lib/kick-api';
 
 const FEATURED = [
   'xqc', 'adinross', 'trainwreckstv', 'amouranth', 'destiny',
@@ -25,15 +25,10 @@ function formatViewers(n: number) {
 }
 
 function loadFavs(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem('kick_favs') || '[]');
-  } catch { return []; }
+  try { return JSON.parse(localStorage.getItem('kick_favs') || '[]'); } catch { return []; }
 }
-
 function loadRecent(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem('kick_recent') || '[]');
-  } catch { return []; }
+  try { return JSON.parse(localStorage.getItem('kick_recent') || '[]'); } catch { return []; }
 }
 
 export default function Home() {
@@ -50,7 +45,7 @@ export default function Home() {
     title: ch.livestream?.session_title || 'Offline',
     viewers: ch.livestream?.viewer_count || 0,
     isLive: !!ch.livestream?.is_live,
-    thumb: ch.livestream?.thumbnail?.url || null,
+    thumb: getThumb(ch),
     avatar: ch.user.profile_pic || null,
     category: ch.livestream?.categories?.[0]?.name || '',
   });
@@ -97,84 +92,110 @@ export default function Home() {
 
   return (
     <div className="home">
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <form className="search-bar" onSubmit={onSearch} style={{ flex: 1, marginBottom: 0 }}>
-          <span style={{ color: 'var(--muted)' }}>🔍</span>
-          <input
-            placeholder="Streamer slug (xqc, adinross...)"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            autoCapitalize="none"
-            autoCorrect="off"
-          />
-          <button type="submit" className="search-btn">Git</button>
-        </form>
-        <button className="icon-btn" onClick={() => nav('/settings')} style={{ fontSize: 22, flexShrink: 0 }} title="Ayarlar">
-          ⚙️
-        </button>
-      </div>
+      <header className="home-header">
+        <div className="logo">
+          <span className="logo-dot" />
+          <span>Kick Companion</span>
+        </div>
+        <button className="icon-btn" onClick={() => nav('/settings')} title="Ayarlar">⚙️</button>
+      </header>
+
+      <form className="search-bar" onSubmit={onSearch}>
+        <span className="search-icon">🔍</span>
+        <input
+          placeholder="Streamer ara (xqc, adinross...)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <button type="submit" className="search-btn">Git</button>
+      </form>
 
       {loading ? (
-        <div className="loading">Yükleniyor...</div>
+        <div className="loading">
+          <div className="spinner" />
+          <span>Yükleniyor...</span>
+        </div>
       ) : (
         <>
           {favs.length > 0 && (
-            <>
+            <section>
               <div className="section-title">❤️ Favoriler</div>
               <div className="chips">
                 {favs.map((f) => (
                   <button key={f.slug} className="chip" onClick={() => go(f.slug)}>
-                    {f.avatar && <img src={f.avatar} alt="" />}
+                    {f.avatar && <img src={f.avatar} alt="" referrerPolicy="no-referrer" />}
                     <span>{f.username}</span>
                     {f.isLive && <span className="live-dot" />}
                   </button>
                 ))}
               </div>
-            </>
+            </section>
           )}
 
           {recent.length > 0 && (
-            <>
-              <div className="section-title">Son İzlenenler</div>
+            <section>
+              <div className="section-title">🕐 Son izlenenler</div>
               <div className="chips">
                 {recent.slice(0, 8).map((s) => (
-                  <button key={s} className="chip" onClick={() => go(s)}>
-                    {s}
-                  </button>
+                  <button key={s} className="chip" onClick={() => go(s)}>{s}</button>
                 ))}
               </div>
-            </>
+            </section>
           )}
 
-          <div className="section-title">Öne Çıkanlar</div>
-          <div className="grid">
-            {streams.map((item) => (
-              <button key={item.slug} className="card" onClick={() => go(item.slug)}>
-                <div className="thumb-wrap">
-                  {item.thumb ? (
-                    <img src={item.thumb} alt="" loading="lazy" />
-                  ) : (
-                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
-                      Offline
-                    </div>
-                  )}
-                  {item.isLive && <span className="live-badge">LIVE</span>}
-                  {item.isLive && (
-                    <span className="viewer-badge">👁 {formatViewers(item.viewers)}</span>
-                  )}
-                </div>
-                <div className="card-body">
-                  {item.avatar ? <img className="avatar" src={item.avatar} alt="" /> : <div className="avatar" />}
-                  <div className="card-info">
-                    <div className="username">{item.username}</div>
-                    <div className="title">{item.title}</div>
-                    {item.category && <div className="category">{item.category}</div>}
+          <section>
+            <div className="section-title">🔥 Öne çıkanlar</div>
+            <div className="grid">
+              {streams.map((item) => (
+                <button key={item.slug} className="card" onClick={() => go(item.slug)}>
+                  <div className="thumb-wrap">
+                    {item.thumb ? (
+                      <img
+                        src={item.thumb}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const el = e.target as HTMLImageElement;
+                          el.style.display = 'none';
+                          el.parentElement?.classList.add('thumb-fallback');
+                        }}
+                      />
+                    ) : (
+                      <div className="thumb-placeholder">
+                        {item.avatar ? (
+                          <img src={item.avatar} alt="" referrerPolicy="no-referrer" />
+                        ) : (
+                          <span>{item.username[0]?.toUpperCase()}</span>
+                        )}
+                      </div>
+                    )}
+                    {item.isLive && <span className="live-badge">LIVE</span>}
+                    {item.isLive && (
+                      <span className="viewer-badge">👁 {formatViewers(item.viewers)}</span>
+                    )}
                   </div>
-                </div>
-              </button>
-            ))}
-          </div>
-          {streams.length === 0 && <div className="empty">Stream bulunamadı. Slu g ile ara.</div>}
+                  <div className="card-body">
+                    {item.avatar ? (
+                      <img className="avatar" src={item.avatar} alt="" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="avatar avatar-fallback">{item.username[0]?.toUpperCase()}</div>
+                    )}
+                    <div className="card-info">
+                      <div className="username">{item.username}</div>
+                      <div className="title">{item.title}</div>
+                      {item.category && <div className="category">{item.category}</div>}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {streams.length === 0 && (
+              <div className="empty">Stream bulunamadı. Slug ile ara.</div>
+            )}
+          </section>
         </>
       )}
     </div>
