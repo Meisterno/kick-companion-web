@@ -14,9 +14,12 @@ async function fetch7TVGlobal(): Promise<Emote[]> {
     if (!res.ok) return [];
     const data = await res.json();
     return (data.emotes || []).map((e: any) => {
-      const file = e.data?.host?.files?.find((f: any) => f.name?.includes('2x')) ||
-                   e.data?.host?.files?.find((f: any) => f.name?.includes('1x'));
-      const url = file ? `https:${e.data.host.url}/${file.name}` : '';
+      const files = e.data?.host?.files || [];
+      const file = files.find((f: any) => f.name === '2x.webp') ||
+                   files.find((f: any) => f.name === '1x.webp') ||
+                   files.find((f: any) => f.name?.includes('2x')) ||
+                   files[0];
+      const url = file && e.data?.host?.url ? `https:${e.data.host.url}/${file.name}` : '';
       return { id: e.id, name: e.name, url };
     }).filter((e: Emote) => e.url);
   } catch { return []; }
@@ -33,9 +36,12 @@ async function fetch7TVChannel(userId: number | string): Promise<Emote[]> {
     if (!setRes.ok) return [];
     const set = await setRes.json();
     return (set.emotes || []).map((e: any) => {
-      const file = e.data?.host?.files?.find((f: any) => f.name?.includes('2x')) ||
-                   e.data?.host?.files?.find((f: any) => f.name?.includes('1x'));
-      const url = file ? `https:${e.data.host.url}/${file.name}` : '';
+      const files = e.data?.host?.files || [];
+      const file = files.find((f: any) => f.name === '2x.webp') ||
+                   files.find((f: any) => f.name === '1x.webp') ||
+                   files.find((f: any) => f.name?.includes('2x')) ||
+                   files[0];
+      const url = file && e.data?.host?.url ? `https:${e.data.host.url}/${file.name}` : '';
       return { id: e.id, name: e.name, url };
     }).filter((e: Emote) => e.url);
   } catch { return []; }
@@ -49,7 +55,7 @@ async function fetchBTTVGlobal(): Promise<Emote[]> {
     return data.map((e: any) => ({
       id: e.id,
       name: e.code,
-      url: `https://cdn.betterttv.net/emote/${e.id}/2x`,
+      url: `https://cdn.betterttv.net/emote/${e.id}/2x.webp`,
     }));
   } catch { return []; }
 }
@@ -68,10 +74,53 @@ export async function loadEmotes(kickUserId?: number | string): Promise<EmoteMap
   return map;
 }
 
+/**
+ * Parse chat message.
+ * 1) Kick native: [emote:ID:NAME] → https://files.kick.com/emotes/ID/fullsize
+ * 2) 7TV / BTTV text names
+ */
 export function parseMessage(content: string, emoteMap: EmoteMap) {
   if (!content) return [];
-  const words = content.split(/(\s+)/);
-  const result: { type: 'text' | 'emote'; value: string; emote?: Emote }[] = [];
+
+  type Part = { type: 'text' | 'emote'; value: string; emote?: Emote };
+  const result: Part[] = [];
+
+  const kickEmoteRe = /\[emote:(\d+):([^\]]*)\]/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = kickEmoteRe.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      pushTextWithThirdParty(content.slice(lastIndex, match.index), emoteMap, result);
+    }
+    const id = match[1];
+    const name = match[2] || id;
+    result.push({
+      type: 'emote',
+      value: name,
+      emote: {
+        id,
+        name,
+        url: `https://files.kick.com/emotes/${id}/fullsize`,
+      },
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    pushTextWithThirdParty(content.slice(lastIndex), emoteMap, result);
+  }
+
+  return result;
+}
+
+function pushTextWithThirdParty(
+  text: string,
+  emoteMap: EmoteMap,
+  result: { type: 'text' | 'emote'; value: string; emote?: Emote }[]
+) {
+  if (!text) return;
+  const words = text.split(/(\s+)/);
   for (const word of words) {
     const t = word.trim();
     if (t && emoteMap[t]) {
@@ -79,10 +128,9 @@ export function parseMessage(content: string, emoteMap: EmoteMap) {
     } else {
       if (result.length && result[result.length - 1].type === 'text') {
         result[result.length - 1].value += word;
-      } else {
+      } else if (word) {
         result.push({ type: 'text', value: word });
       }
     }
   }
-  return result;
 }
