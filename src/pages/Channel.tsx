@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import { getChannel, type KickChannel } from '../lib/kick-api';
@@ -38,8 +38,13 @@ export default function Channel() {
   const { slug = '' } = useParams();
   const nav = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const chatListRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const pendingRef = useRef<Msg[]>([]);
+  const rafRef = useRef<number>(0);
+  const stickBottomRef = useRef(true);
+  const lastContentRef = useRef('');
 
   const [channel, setChannel] = useState<KickChannel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,16 +56,54 @@ export default function Channel() {
   const [showChat, setShowChat] = useState(getSetting('kick_auto_hide_chat', '0') !== '1');
   const [muted, setMuted] = useState(true);
   const [playerError, setPlayerError] = useState('');
+  const [chatPaused, setChatPaused] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const lowLatency = getSetting('kick_low_latency', '1') === '1';
-  const chatLimit = parseInt(getSetting('kick_chat_limit', '200'), 10) || 200;
+  const chatLimit = parseInt(getSetting('kick_chat_limit', '150'), 10) || 150;
   const showTs = getSetting('kick_timestamps', '1') === '1';
+  const hideSpam = getSetting('kick_hide_spam', '1') === '1';
+  const compact = getSetting('kick_compact_chat', '0') === '1';
+  const fontSize = getSetting('kick_chat_font', '14');
+
+  const flushMessages = useCallback(() => {
+    rafRef.current = 0;
+    const batch = pendingRef.current;
+    if (!batch.length) return;
+    pendingRef.current = [];
+
+    if (!stickBottomRef.current) {
+      setPendingCount((c) => c + batch.length);
+      return;
+    }
+
+    setMessages((prev) => {
+      const next = prev.length + batch.length > chatLimit
+        ? [...prev, ...batch].slice(-chatLimit)
+        : [...prev, ...batch];
+      return next;
+    });
+  }, [chatLimit]);
+
+  const queueMessage = useCallback((msg: Msg) => {
+    if (hideSpam) {
+      const key = msg.user + ':' + msg.content;
+      if (key === lastContentRef.current && msg.content.length > 8) return;
+      lastContentRef.current = key;
+    }
+    pendingRef.current.push(msg);
+    if (!rafRef.current) {
+      rafRef.current = requestAnimationFrame(flushMessages);
+    }
+  }, [hideSpam, flushMessages]);
 
   const load = useCallback(async () => {
     if (!slug) return;
     setLoading(true);
     setError('');
     setPlayerError('');
+    setMessages([]);
+    pendingRef.current = [];
     try {
       const data = await getChannel(slug.toLowerCase());
       setChannel(data);
@@ -79,7 +122,7 @@ export default function Channel() {
 
   useEffect(() => { load(); }, [load]);
 
-  // HLS player
+  // HLS
   useEffect(() => {
     const url = channel?.playback_url;
     const video = videoRef.current;
@@ -97,65 +140,88 @@ export default function Channel() {
         maxBufferLength: lowLatency ? 12 : 30,
         maxMaxBufferLength: 60,
         startLevel: -1,
-        xhrSetup: (xhr) => {
-          xhr.withCredentials = false;
-        },
       });
       hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => {});
-      });
-
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data.fatal) {
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            hls.startLoad();
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError();
-          } else {
-            setPlayerError('Yayın yüklenemedi. Yenilemeyi dene.');
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+          else {
+            setPlayerError('Yayın yüklenemedi');
             hls.destroy();
           }
         }
       });
-
-      return () => {
-        hls.destroy();
-        hlsRef.current = null;
-      };
+      return () => { hls.destroy(); hlsRef.current = null; };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = url;
       video.play().catch(() => {});
     } else {
-      setPlayerError('Bu tarayıcı HLS desteklemiyor');
+      setPlayerError('HLS desteklenmiyor');
     }
   }, [channel?.playback_url, channel?.livestream?.is_live, lowLatency]);
 
-  // Chat
+  // Chat with batching
   useEffect(() => {
     if (!channel?.chatroom?.id) return;
     const client = new KickChatClient();
     client.onStatus = setChatStatus;
     client.onMessage((data) => {
-      const msg: Msg = {
+      queueMessage({
         id: data.id || String(Date.now() + Math.random()),
         user: data.sender?.username || 'anon',
         content: data.content || '',
         color: data.sender?.identity?.color || '#53fc18',
         time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => {
-        const next = [...prev, msg];
-        return next.length > chatLimit ? next.slice(-chatLimit) : next;
       });
-      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 30);
     });
     client.connect(channel.chatroom.id);
-    return () => client.disconnect();
-  }, [channel?.chatroom?.id, chatLimit]);
+    return () => {
+      client.disconnect();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [channel?.chatroom?.id, queueMessage]);
+
+  // Auto-scroll only when stuck to bottom
+  useEffect(() => {
+    if (stickBottomRef.current && !chatPaused) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [messages, chatPaused]);
+
+  const onChatScroll = () => {
+    const el = chatListRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickBottomRef.current = nearBottom;
+    if (nearBottom && chatPaused) {
+      setChatPaused(false);
+      // flush pending
+      if (pendingRef.current.length) {
+        const batch = pendingRef.current;
+        pendingRef.current = [];
+        setPendingCount(0);
+        setMessages((prev) => [...prev, ...batch].slice(-chatLimit));
+      }
+    } else if (!nearBottom && !chatPaused) {
+      setChatPaused(true);
+    }
+  };
+
+  const resumeChat = () => {
+    stickBottomRef.current = true;
+    setChatPaused(false);
+    if (pendingRef.current.length) {
+      const batch = pendingRef.current;
+      pendingRef.current = [];
+      setMessages((prev) => [...prev, ...batch].slice(-chatLimit));
+    }
+    setPendingCount(0);
+    requestAnimationFrame(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+  };
 
   const onFav = () => {
     if (!slug) return;
@@ -168,6 +234,31 @@ export default function Channel() {
     v.muted = !v.muted;
     setMuted(v.muted);
     if (!v.muted) v.play().catch(() => {});
+  };
+
+  const enterPiP = async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await v.requestPictureInPicture();
+    } catch {}
+  };
+
+  const reloadStream = () => {
+    const hls = hlsRef.current;
+    const v = videoRef.current;
+    if (hls) {
+      hls.startLoad();
+      v?.play().catch(() => {});
+    } else if (v && channel?.playback_url) {
+      v.src = channel.playback_url;
+      v.play().catch(() => {});
+    }
+  };
+
+  const openKick = () => {
+    window.open(`https://kick.com/${slug}`, '_blank');
   };
 
   if (loading) {
@@ -183,9 +274,7 @@ export default function Channel() {
     return (
       <div className="error-box">
         <p>{error || 'Kanal bulunamadı'}</p>
-        <button className="search-btn" style={{ marginTop: 16 }} onClick={() => nav('/')}>
-          Ana Sayfa
-        </button>
+        <button className="search-btn" style={{ marginTop: 16 }} onClick={() => nav('/')}>Ana Sayfa</button>
       </div>
     );
   }
@@ -206,6 +295,7 @@ export default function Channel() {
             <span>{channel.user.username}</span>
           </div>
           <div className="topbar-actions">
+            <button className="icon-btn" onClick={openKick} title="Kick'te aç">↗</button>
             <button className="icon-btn" onClick={() => nav('/settings')} title="Ayarlar">⚙️</button>
             <button className="icon-btn" onClick={onFav} title="Favori">
               <span className={fav ? 'heart' : ''}>{fav ? '♥' : '♡'}</span>
@@ -216,18 +306,9 @@ export default function Channel() {
         <div className="player-area">
           {isLive && channel.playback_url ? (
             <>
-              <video
-                ref={videoRef}
-                controls
-                playsInline
-                autoPlay
-                muted
-                poster=""
-              />
+              <video ref={videoRef} controls playsInline autoPlay muted poster="" />
               {muted && !playerError && (
-                <button className="unmute-btn" onClick={toggleMute}>
-                  🔊 Sesi Aç
-                </button>
+                <button className="unmute-btn" onClick={toggleMute}>🔊 Sesi Aç</button>
               )}
               {playerError && (
                 <div className="player-error">
@@ -235,6 +316,10 @@ export default function Channel() {
                   <button className="search-btn" onClick={load}>Yenile</button>
                 </div>
               )}
+              <div className="player-tools">
+                <button type="button" onClick={reloadStream} title="Yeniden yükle">↻</button>
+                <button type="button" onClick={enterPiP} title="Picture-in-Picture">⧉</button>
+              </div>
             </>
           ) : (
             <div className="offline-box">
@@ -267,7 +352,12 @@ export default function Channel() {
               <button onClick={() => setShowChat(false)} className="icon-btn" style={{ fontSize: 16 }}>▾</button>
             </div>
           </div>
-          <div className="chat-list">
+          <div
+            className={`chat-list ${compact ? 'compact' : ''}`}
+            ref={chatListRef}
+            onScroll={onChatScroll}
+            style={{ fontSize: `${fontSize}px` }}
+          >
             {messages.length === 0 && (
               <div className="chat-empty">
                 {chatStatus === 'connected' ? 'Mesajlar burada görünecek...' : 'Bağlanıyor...'}
@@ -289,6 +379,7 @@ export default function Channel() {
                           alt={p.value}
                           title={p.value}
                           loading="lazy"
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                         />
@@ -302,11 +393,14 @@ export default function Channel() {
             })}
             <div ref={chatEndRef} />
           </div>
+          {chatPaused && (
+            <button className="chat-resume" onClick={resumeChat}>
+              ⏸ Chat duraklatıldı{pendingCount > 0 ? ` · ${pendingCount} yeni` : ''} — devam et
+            </button>
+          )}
         </div>
       ) : (
-        <button className="show-chat-btn" onClick={() => setShowChat(true)}>
-          💬 Chat'i Göster
-        </button>
+        <button className="show-chat-btn" onClick={() => setShowChat(true)}>💬 Chat'i Göster</button>
       )}
     </div>
   );
