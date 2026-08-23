@@ -32,13 +32,16 @@ function toggleFav(slug: string): boolean {
   return i < 0;
 }
 
+function getSetting(key: string, def: string) {
+  try { return localStorage.getItem(key) || def; } catch { return def; }
+}
+
 export default function Channel() {
   const { slug = '' } = useParams();
   const nav = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const chatRef = useRef<KickChatClient | null>(null);
 
   const [channel, setChannel] = useState<KickChannel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,6 +51,10 @@ export default function Channel() {
   const [emotes, setEmotes] = useState<EmoteMap>({});
   const [fav, setFav] = useState(false);
   const [showChat, setShowChat] = useState(true);
+  const [muted, setMuted] = useState(true);
+
+  const lowLatency = getSetting('kick_low_latency', '1') === '1';
+  const chatLimit = parseInt(getSetting('kick_chat_limit', '200'), 10) || 200;
 
   const load = useCallback(async () => {
     if (!slug) return;
@@ -71,17 +78,21 @@ export default function Channel() {
 
   useEffect(() => { load(); }, [load]);
 
-  // HLS player
+  // HLS player – muted autoplay works on mobile
   useEffect(() => {
     const url = channel?.playback_url;
     const video = videoRef.current;
     if (!url || !video || !channel?.livestream?.is_live) return;
 
+    video.muted = true;
+    setMuted(true);
+
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: lowLatency,
         backBufferLength: 30,
+        maxBufferLength: lowLatency ? 10 : 30,
       });
       hlsRef.current = hls;
       hls.loadSource(url);
@@ -97,13 +108,12 @@ export default function Channel() {
       video.src = url;
       video.play().catch(() => {});
     }
-  }, [channel?.playback_url, channel?.livestream?.is_live]);
+  }, [channel?.playback_url, channel?.livestream?.is_live, lowLatency]);
 
   // Chat
   useEffect(() => {
     if (!channel?.chatroom?.id) return;
     const client = new KickChatClient();
-    chatRef.current = client;
     client.onStatus = setChatStatus;
     client.onMessage((data) => {
       const msg: Msg = {
@@ -115,17 +125,25 @@ export default function Channel() {
       };
       setMessages((prev) => {
         const next = [...prev, msg];
-        return next.length > 200 ? next.slice(-200) : next;
+        return next.length > chatLimit ? next.slice(-chatLimit) : next;
       });
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 30);
     });
     client.connect(channel.chatroom.id);
     return () => client.disconnect();
-  }, [channel?.chatroom?.id]);
+  }, [channel?.chatroom?.id, chatLimit]);
 
   const onFav = () => {
     if (!slug) return;
     setFav(toggleFav(slug.toLowerCase()));
+  };
+
+  const toggleMute = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    setMuted(v.muted);
+    if (!v.muted) v.play().catch(() => {});
   };
 
   if (loading) {
@@ -156,14 +174,47 @@ export default function Channel() {
             {channel.user.profile_pic && <img src={channel.user.profile_pic} alt="" />}
             <span>{channel.user.username}</span>
           </div>
-          <button className="icon-btn" onClick={onFav}>
-            <span className={fav ? 'heart' : ''}>{fav ? '♥' : '♡'}</span>
-          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button className="icon-btn" onClick={() => nav('/settings')} title="Ayarlar">⚙️</button>
+            <button className="icon-btn" onClick={onFav}>
+              <span className={fav ? 'heart' : ''}>{fav ? '♥' : '♡'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="player-area">
           {isLive && channel.playback_url ? (
-            <video ref={videoRef} controls playsInline autoPlay />
+            <>
+              <video
+                ref={videoRef}
+                controls
+                playsInline
+                autoPlay
+                muted
+                style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}
+              />
+              {muted && (
+                <button
+                  onClick={toggleMute}
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    background: 'rgba(0,0,0,0.75)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 12,
+                    padding: '12px 20px',
+                    fontSize: 15,
+                    fontWeight: 700,
+                    zIndex: 5,
+                  }}
+                >
+                  🔊 Sesi Aç
+                </button>
+              )}
+            </>
           ) : (
             <div className="offline-box">
               {channel.user.profile_pic && <img src={channel.user.profile_pic} alt="" />}
@@ -212,7 +263,17 @@ export default function Channel() {
                   <span className="msg-content">
                     {parts.map((p, i) =>
                       p.type === 'emote' && p.emote ? (
-                        <img key={i} className="emote" src={p.emote.url} alt={p.value} />
+                        <img
+                          key={i}
+                          className="emote"
+                          src={p.emote.url}
+                          alt={p.value}
+                          title={p.value}
+                          loading="lazy"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
                       ) : (
                         <span key={i}>{p.value}</span>
                       )
